@@ -119,12 +119,9 @@ func main() {
 }
 
 func setupPrivate() (privkey jwk.Key, err error) {
-	buff, err := os.ReadFile("private.pem")
-	if err != nil {
-		return
-	}
+	buff := os.Getenv("PRIVATE_KEY")
 
-	rsaKey, err := decode(buff)
+	rsaKey, err := decode([]byte(buff))
 	if err != nil {
 		return
 	}
