@@ -35,7 +35,6 @@ func main() {
 	err := godotenv.Load()
 	if err != nil {
 		slog.Error(err.Error())
-		return
 	}
 
 	privkey, err = setupPrivate()
@@ -83,15 +82,21 @@ func main() {
 			return
 		}
 
-		id := uuid.NewString()
-		if _, err := db.Exec("insert into users(id,name,email,avatar) values(?,?,?,?) on duplicate key update email=email",
-			id, user.Name,
-			user.Email,
-			user.AvatarURL); err != nil {
-			slog.Error(err.Error())
-			ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error": err.Error(),
-			})
+		var id string
+		err = db.QueryRow("SELECT id FROM users WHERE email = ?", user.Email).Scan(&id)
+		if err == sql.ErrNoRows {
+			id = uuid.NewString()
+			_, err = db.Exec(`
+        INSERT INTO users(id, name, email, avatar)
+        VALUES (?, ?, ?, ?)`,
+				id, user.Name, user.Email, user.AvatarURL,
+			)
+			if err != nil {
+				ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else if err != nil {
+			ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
