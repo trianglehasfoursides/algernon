@@ -1,88 +1,154 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"strings"
+	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"gorm.io/gorm"
 )
 
-type companies struct {
-	w        int
-	h        int
-	items    [][]string
-	selected int
+// gorm model
+type Company struct {
+	gorm.Model
+	Name     string
+	Industry string
+	Location string
+	Status   string
+	Website  string
+	Email    string
+	Phone    string
+	Notes    string
 }
 
-func (c companies) Init() tea.Cmd { return nil }
+type company struct {
+	width     int
+	height    int
+	items     [][]string
+	records   []Company
+	current   int
+	selected  []string
+	state     string
+	form      tea.Model
+	page      int
+	pagesize  int
+	totalpage int
+}
 
-func (c companies) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (c *company) load() {
+	var total int64
+
+	db.Model(&Company{}).Count(&total)
+
+	_ = db.
+		Limit(c.pagesize).
+		Offset((c.page - 1) * c.pagesize).
+		Find(&c.records)
+
+	c.items = [][]string{}
+	for _, r := range c.records {
+		c.items = append(c.items, []string{
+			r.Name,
+			r.Email,
+		})
+	}
+
+	c.totalpage = (int(total) + c.pagesize) / c.pagesize
+
+}
+
+func (c *company) Init() tea.Cmd {
+	return nil
+}
+
+func (c *company) Update(msg tea.Msg) (company, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		c.h = msg.Height
-		c.w = msg.Width
+		c.height = msg.Height
+		c.width = msg.Width
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
-			return c, tea.Quit
+		case "q":
+			return *c, func() tea.Msg {
+				return childmsg{}
+			}
 		case "up":
-			if c.selected > 0 {
-				c.selected--
+			if c.current > 0 {
+				c.current--
 			}
 		case "down":
-			if c.selected < len(c.items)-1 {
-				c.selected++
+			if c.current < len(c.items)-1 {
+				c.current++
 			}
+		case "right":
+			if c.page < c.totalpage {
+				c.page++
+				c.current = 0
+				c.load()
+			}
+		case "left":
+			if c.page > 1 {
+				c.page--
+				c.current = 0
+				c.load()
+			}
+		case "enter":
+			if len(c.items) > 0 {
+				c.selected = c.items[c.current]
+			}
+		case "c":
+			c.selected = nil
+		case "a":
+			c.state = "add"
+			c.form = huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().Title("Company name"),
+				),
+			)
 		}
 	}
-
-	return c, nil
+	return *c, nil
 }
 
-func (c companies) View() string {
+func (c *company) View() string {
+	switch c.state {
+	case "add":
+		c.form = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput(),
+			),
+		)
+
+		return c.form.View()
+	}
+
+	// default
 	re := lipgloss.NewRenderer(os.Stdout)
+
 	baseStyle := re.NewStyle().Padding(0, 1)
+
 	headerStyle := baseStyle.Foreground(lipgloss.Color("252")).Bold(true)
+
 	selectedStyle := baseStyle.Foreground(lipgloss.Color("#01BE85")).Background(lipgloss.Color("#00432F"))
-	typeColors := map[string]lipgloss.Color{
-		"Bug":      lipgloss.Color("#D7FF87"),
-		"Electric": lipgloss.Color("#FDFF90"),
-		"Fire":     lipgloss.Color("#FF7698"),
-		"Flying":   lipgloss.Color("#FF87D7"),
-		"Grass":    lipgloss.Color("#75FBAB"),
-		"Ground":   lipgloss.Color("#FF875F"),
-		"Normal":   lipgloss.Color("#929292"),
-		"Poison":   lipgloss.Color("#7D5AFC"),
-		"Water":    lipgloss.Color("#00E2C7"),
-	}
-	dimTypeColors := map[string]lipgloss.Color{
-		"Bug":      lipgloss.Color("#97AD64"),
-		"Electric": lipgloss.Color("#FCFF5F"),
-		"Fire":     lipgloss.Color("#BA5F75"),
-		"Flying":   lipgloss.Color("#C97AB2"),
-		"Grass":    lipgloss.Color("#59B980"),
-		"Ground":   lipgloss.Color("#C77252"),
-		"Normal":   lipgloss.Color("#727272"),
-		"Poison":   lipgloss.Color("#634BD0"),
-		"Water":    lipgloss.Color("#439F8E"),
-	}
 
-	headers := []string{"#", "Name", "Type 1", "Type 2", "Japanese", "Official Rom."}
-
-	CapitalizeHeaders := func(data []string) []string {
-		for i := range data {
-			data[i] = strings.ToUpper(data[i])
-		}
-		return data
+	headers := []string{
+		"Name",
+		"Industry",
+		"Location",
+		"Status",
+		"Website",
+		"Email",
+		"Phone",
+		"Notes",
 	}
 
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("238"))).
-		Headers(CapitalizeHeaders(headers)...).
+		Headers(headers...).
 		Width(80).
 		Rows(c.items...).
 		StyleFunc(func(row, col int) lipgloss.Style {
@@ -91,21 +157,11 @@ func (c companies) View() string {
 			}
 
 			// highlight baris yang dipilih
-			if row == c.selected {
+			if row == c.current {
 				return selectedStyle
 			}
 
 			even := row%2 == 0
-
-			switch col {
-			case 2, 3: // Type 1 + 2
-				h := typeColors
-				if even {
-					h = dimTypeColors
-				}
-				color := h[fmt.Sprint(c.items[row][col])]
-				return baseStyle.Foreground(color)
-			}
 
 			if even {
 				return baseStyle.Foreground(lipgloss.Color("245"))
@@ -113,10 +169,12 @@ func (c companies) View() string {
 			return baseStyle.Foreground(lipgloss.Color("252"))
 		})
 
+	total := lipgloss.NewStyle().MarginTop(4).Render("total pages : ", strconv.Itoa(c.totalpage))
+	v := lipgloss.JoinVertical(lipgloss.Center, t.Render(), total)
 	return lipgloss.Place(
-		c.w, c.h, // ukuran terminal dari WindowSizeMsg
-		lipgloss.Center, // horizontal alignment
-		lipgloss.Center, // vertical alignment
-		t.Render(),
+		c.width, c.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		v,
 	)
 }
